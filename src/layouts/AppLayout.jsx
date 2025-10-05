@@ -1,0 +1,215 @@
+import React from 'react';
+import { Outlet } from 'react-router-dom';
+import { useData } from '../context/DataContext';
+import { useUI } from '../context/UIContext';
+import SubHeader from '../components/SubHeader';
+import SettingsDrawerWrapper from '../components/SettingsDrawerWrapper';
+import BudgetDrawer from '../components/BudgetDrawer';
+import InfoModal from '../components/InfoModal';
+import ConfirmationModal from '../components/ConfirmationModal';
+import InlinePaymentDrawer from '../components/InlinePaymentDrawer';
+import TransferModal from '../components/TransferModal';
+import CloseAccountModal from '../components/CloseAccountModal';
+import ScenarioModal from '../components/ScenarioModal';
+import ActualTransactionModal from '../components/ActualTransactionModal';
+import PaymentModal from '../components/PaymentModal';
+import DirectPaymentModal from '../components/DirectPaymentModal';
+import TransactionActionMenu from '../components/TransactionActionMenu';
+import ConsolidatedViewModal from '../components/ConsolidatedViewModal';
+import CommentDrawer from '../components/CommentDrawer';
+import TierDetailDrawer from '../components/TierDetailDrawer';
+import SaveTemplateModal from '../components/SaveTemplateModal';
+import CollaborationBanner from '../components/CollaborationBanner';
+import PaymentTermsModal from '../components/PaymentTermsModal';
+import ShareProjectDrawer from '../components/ShareProjectDrawer';
+import VerticalNavBar from '../components/VerticalNavBar';
+import BudgetEntryDetailDrawer from '../components/BudgetEntryDetailDrawer';
+import { saveEntry, deleteEntry, saveActual, deleteActual, recordPayment, writeOffActual, saveConsolidatedView, saveScenario, updateTierPaymentTerms } from '../context/actions';
+import { Loader } from 'lucide-react';
+
+const AppLayout = () => {
+    const { dataState, dataDispatch } = useData();
+    const { uiState, uiDispatch } = useUI();
+    
+    const { 
+        session, tiers
+    } = dataState;
+    
+    const { 
+        isLoading, activeProjectId, activeSettingsDrawer, isBudgetDrawerOpen, isBudgetDrawerMinimized, budgetDrawerData, 
+        infoModal, confirmationModal, inlinePaymentDrawer, isTransferModalOpen, 
+        isCloseAccountModalOpen, accountToClose, isScenarioModalOpen, editingScenario, 
+        isActualTransactionModalOpen, editingActual, isPaymentModalOpen, payingActual, 
+        isDirectPaymentModalOpen, directPaymentType, transactionMenu, isConsolidatedViewModalOpen, 
+        editingConsolidatedView, isCommentDrawerOpen, commentDrawerContext, isTierDetailDrawerOpen, 
+        tierDetailContext, isSaveTemplateModalOpen, editingTemplate, isShareProjectDrawerOpen
+    } = uiState;
+    
+    const [isPaymentTermsModalOpen, setIsPaymentTermsModalOpen] = React.useState(false);
+    const [editingTierForTerms, setEditingTierForTerms] = React.useState(null);
+
+    if (isLoading) {
+        return (
+            <div className="w-screen h-screen flex items-center justify-center bg-gray-50">
+                <div className="flex flex-col items-center gap-4">
+                    <Loader className="w-12 h-12 text-blue-600 animate-spin" />
+                    <p className="text-gray-600">Chargement de vos données...</p>
+                </div>
+            </div>
+        );
+    }
+
+    const handleConfirm = () => {
+        if (confirmationModal.onConfirm) {
+            confirmationModal.onConfirm();
+        }
+        uiDispatch({ type: 'CLOSE_CONFIRMATION_MODAL' });
+    };
+    
+    const handleCancel = () => {
+        uiDispatch({ type: 'CLOSE_CONFIRMATION_MODAL' });
+    };
+
+    const handleConfirmCloseAccount = (closureDate) => {
+        if (accountToClose) {
+            dataDispatch({
+                type: 'CLOSE_CASH_ACCOUNT',
+                payload: {
+                    projectId: accountToClose.projectId,
+                    accountId: accountToClose.id,
+                    closureDate,
+                },
+            });
+        }
+    };
+
+    const handleSaveScenario = (scenarioData) => {
+        const user = session?.user;
+        if (!user) {
+            uiDispatch({ type: 'ADD_TOAST', payload: { message: 'Utilisateur non authentifié.', type: 'error' } });
+            return;
+        }
+        saveScenario({dataDispatch, uiDispatch}, {
+            scenarioData,
+            editingScenario,
+            activeProjectId,
+            user,
+            existingScenariosCount: dataState.scenarios.length
+        });
+        uiDispatch({ type: 'CLOSE_SCENARIO_MODAL' });
+    };
+
+    const handlePayAction = (transaction) => {
+        uiDispatch({ type: 'OPEN_PAYMENT_MODAL', payload: transaction });
+    };
+
+    const handleWriteOffAction = (transaction) => {
+        const remainingAmount = transaction.amount - (transaction.payments || []).reduce((sum, p) => sum + p.paidAmount, 0);
+        uiDispatch({
+            type: 'OPEN_CONFIRMATION_MODAL',
+            payload: {
+                title: 'Confirmer le Write-off',
+                message: `Êtes-vous sûr de vouloir annuler le montant restant de ${formatCurrency(remainingAmount, dataState.settings)} ? Cette action est irréversible.`,
+                onConfirm: () => writeOffActual({dataDispatch, uiDispatch}, transaction.id),
+            }
+        });
+    };
+
+    const handleEditAction = (transaction) => {
+        const budgetEntryId = transaction.budgetId;
+        if (budgetEntryId) {
+            const entry = Object.values(dataState.allEntries).flat().find(e => e.id === budgetEntryId);
+            if (entry) {
+                uiDispatch({ type: 'OPEN_BUDGET_DRAWER', payload: { entry, onSave: handleDefaultSave, onDelete: () => handleDefaultDelete(entry) } });
+            } else {
+                uiDispatch({ type: 'ADD_TOAST', payload: { message: "L'écriture budgétaire parente est introuvable.", type: 'error' } });
+            }
+        } else {
+            uiDispatch({ type: 'OPEN_ACTUAL_TRANSACTION_MODAL', payload: transaction });
+        }
+    };
+
+    const handleSaveConsolidatedView = (viewData) => {
+        const user = session?.user;
+        if (!user) return;
+        saveConsolidatedView({dataDispatch, uiDispatch}, { viewData, editingView: editingConsolidatedView, user });
+    };
+
+    const handleOpenPaymentTerms = (tier) => {
+        setEditingTierForTerms(tier);
+        setIsPaymentTermsModalOpen(true);
+    };
+
+    const handleSavePaymentTerms = (tierId, terms) => {
+        updateTierPaymentTerms({dataDispatch, uiDispatch}, { tierId, terms });
+        setIsPaymentTermsModalOpen(false);
+    };
+    
+    const handleDefaultSave = (entryData) => {
+        const user = session?.user;
+        if (!user) {
+            uiDispatch({ type: 'ADD_TOAST', payload: { message: 'Vous devez être connecté.', type: 'error' } });
+            return;
+        }
+        const targetProjectId = entryData.projectId || activeProjectId;
+        const cashAccountsForEntry = dataState.allCashAccounts[targetProjectId] || [];
+        saveEntry({dataDispatch, uiDispatch, dataState}, { 
+            entryData: { ...entryData, user_id: user.id }, 
+            editingEntry: budgetDrawerData?.entry, 
+            activeProjectId: targetProjectId, 
+            tiers,
+            user,
+            cashAccounts: cashAccountsForEntry,
+            exchangeRates: dataState.exchangeRates
+        });
+    };
+
+    const handleDefaultDelete = (entry) => {
+        const entryToDelete = Object.values(dataState.allEntries).flat().find(e => e.id === entry.id);
+        deleteEntry({dataDispatch, uiDispatch}, { entryId: entry.id, entryProjectId: entryToDelete?.projectId });
+    };
+    
+    return (
+        <div className="h-screen flex bg-background">
+            <VerticalNavBar />
+            <div className="flex-1 flex flex-col pl-24">
+                <SubHeader />
+                <div className="flex-1 overflow-y-auto bg-gray-50">
+                    <CollaborationBanner />
+                    <main>
+                        <Outlet context={{ onOpenPaymentTerms: handleOpenPaymentTerms }} />
+                    </main>
+                </div>
+            </div>
+            
+            <SettingsDrawerWrapper activeDrawer={activeSettingsDrawer} onClose={() => uiDispatch({ type: 'SET_ACTIVE_SETTINGS_DRAWER', payload: null })} />
+            
+            <BudgetDrawer 
+                isOpen={isBudgetDrawerOpen} 
+                isMinimized={isBudgetDrawerMinimized}
+                onClose={() => uiDispatch({ type: 'CLOSE_BUDGET_DRAWER' })} 
+                onToggleMinimize={() => uiDispatch({ type: 'TOGGLE_BUDGET_DRAWER_MINIMIZE' })}
+                data={budgetDrawerData}
+            />
+            {isActualTransactionModalOpen && <ActualTransactionModal isOpen={isActualTransactionModalOpen} onClose={() => uiDispatch({ type: 'CLOSE_ACTUAL_TRANSACTION_MODAL' })} editingData={editingActual} type={editingActual?.type} />}
+            {isPaymentModalOpen && <PaymentModal isOpen={isPaymentModalOpen} onClose={() => uiDispatch({ type: 'CLOSE_PAYMENT_MODAL' })} actualToPay={payingActual} type={payingActual?.type} />}
+            {isDirectPaymentModalOpen && <DirectPaymentModal isOpen={isDirectPaymentModalOpen} onClose={() => uiDispatch({ type: 'CLOSE_DIRECT_PAYMENT_MODAL' })} onSave={(data) => dataDispatch({ type: 'RECORD_BATCH_PAYMENT', payload: data })} type={directPaymentType} />}
+            {isScenarioModalOpen && <ScenarioModal isOpen={isScenarioModalOpen} onClose={() => uiDispatch({ type: 'CLOSE_SCENARIO_MODAL' })} onSave={handleSaveScenario} scenario={editingScenario} />}
+            {isConsolidatedViewModalOpen && <ConsolidatedViewModal isOpen={isConsolidatedViewModalOpen} onClose={() => uiDispatch({ type: 'CLOSE_CONSOLIDATED_VIEW_MODAL' })} onSave={handleSaveConsolidatedView} editingView={editingConsolidatedView} />}
+            {isSaveTemplateModalOpen && <SaveTemplateModal isOpen={isSaveTemplateModalOpen} onClose={() => uiDispatch({ type: 'CLOSE_SAVE_TEMPLATE_MODAL' })} editingTemplate={editingTemplate} />}
+            <PaymentTermsModal isOpen={isPaymentTermsModalOpen} onClose={() => setIsPaymentTermsModalOpen(false)} tier={editingTierForTerms} onSave={handleSavePaymentTerms} />
+            {infoModal.isOpen && <InfoModal isOpen={infoModal.isOpen} onClose={() => uiDispatch({ type: 'CLOSE_INFO_MODAL' })} title={infoModal.title} message={infoModal.message} />}
+            <ConfirmationModal isOpen={confirmationModal.isOpen} onClose={handleCancel} onConfirm={handleConfirm} title={confirmationModal.title} message={confirmationModal.message} confirmText={confirmationModal.confirmText} cancelText={confirmationModal.cancelText} confirmColor={confirmationModal.confirmColor} />
+            <InlinePaymentDrawer isOpen={inlinePaymentDrawer.isOpen} onClose={() => uiDispatch({ type: 'CLOSE_INLINE_PAYMENT_DRAWER' })} actuals={inlinePaymentDrawer.actuals} entry={inlinePaymentDrawer.entry} period={inlinePaymentDrawer.period} periodLabel={inlinePaymentDrawer.periodLabel} />
+            <TransferModal isOpen={isTransferModalOpen} onClose={() => uiDispatch({ type: 'CLOSE_TRANSFER_MODAL' })} onSave={(data) => dataDispatch({ type: 'TRANSFER_FUNDS', payload: data })} />
+            <CloseAccountModal isOpen={isCloseAccountModalOpen} onClose={() => uiDispatch({ type: 'CLOSE_CLOSE_ACCOUNT_MODAL' })} onConfirm={handleConfirmCloseAccount} accountName={accountToClose?.name} minDate={dataState.projects.find(p => p.id === accountToClose?.projectId)?.startDate} />
+            <TransactionActionMenu menuState={transactionMenu} onClose={() => uiDispatch({ type: 'CLOSE_TRANSACTION_ACTION_MENU' })} onPay={handlePayAction} onWriteOff={handleWriteOffAction} onEdit={handleEditAction} />
+            <CommentDrawer isOpen={isCommentDrawerOpen} onClose={() => uiDispatch({ type: 'CLOSE_COMMENT_DRAWER' })} context={commentDrawerContext} />
+            <TierDetailDrawer isOpen={isTierDetailDrawerOpen} onClose={() => uiDispatch({ type: 'CLOSE_TIER_DETAIL_DRAWER' })} context={tierDetailContext} />
+            <ShareProjectDrawer isOpen={isShareProjectDrawerOpen} onClose={() => uiDispatch({ type: 'CLOSE_SHARE_PROJECT_DRAWER' })} />
+            <BudgetEntryDetailDrawer onDelete={handleDefaultDelete} />
+        </div>
+    );
+};
+
+export default AppLayout;
